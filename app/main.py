@@ -25,6 +25,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:5173",
+        "https://codezaro-frontend.onrender.com",   # <-- added your live frontend
+        "https://codezaro-backend.onrender.com",    # optional, for self-reference
     ],
     allow_credentials=True,
     allow_methods=["*"],

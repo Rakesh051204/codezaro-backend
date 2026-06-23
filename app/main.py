@@ -25,6 +25,8 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "https://codezaro-frontend.onrender.com",    # <-- your live frontend
         "https://codezaro-backend.onrender.com",     # optional
+        "https://codezaro-frontend.onrender.com",
+
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -42,8 +44,3 @@ def root():
 def health():
     return {"status": "ok"}
 
-@app.get("/debug-key")
-def debug_key():
-    from app.config import settings
-    key = settings.GROQ_API_KEY
-    return {"key_preview": key[:10] + "..." + key[-6:] if key else "EMPTY"}

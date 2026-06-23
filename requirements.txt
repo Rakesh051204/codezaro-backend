@@ -13,3 +13,4 @@ alembic==1.14.1
 python-multipart
 psycopg2-binary
 groq
+stripe

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.payments import router as payments_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 from app import models
@@ -35,6 +36,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(review_router)
+app.include_router(payments_router)
 
 @app.get("/")
 def root():

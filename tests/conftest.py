@@ -6,7 +6,7 @@ os.environ["SECRET_KEY"] = "test_secret_123"
 os.environ["GROQ_API_KEY"] = "fake_key_for_tests"
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport   # <-- import ASGITransport
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.main import app
@@ -31,8 +31,8 @@ async def client():
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # Provide an async test client
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    # Provide an async test client using ASGITransport (correct syntax)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
     # Cleanup

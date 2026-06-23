@@ -41,3 +41,9 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/debug-key")
+def debug_key():
+    from app.config import settings
+    key = settings.GROQ_API_KEY
+    return {"key_preview": key[:10] + "..." + key[-6:] if key else "EMPTY"}

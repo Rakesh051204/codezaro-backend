@@ -1,3 +1,10 @@
+import os
+
+# Set test environment variables before importing app modules
+os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+os.environ["SECRET_KEY"] = "test_secret_123"
+os.environ["GROQ_API_KEY"] = "fake_key_for_tests"
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import create_engine
@@ -5,13 +12,10 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.database import get_db, Base
 
-# Use a test database (SQLite in‑memory)
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
 @pytest.fixture(scope="function")
 async def client():
     # Create test database engine
-    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine("sqlite:///./test.db", connect_args={"check_same_thread": False})
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     # Create tables

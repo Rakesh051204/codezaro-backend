@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # Anthropic (optional – we now use Groq)
+    # Anthropic
     ANTHROPIC_API_KEY: str = ""
 
-    # Groq (free tier)
+    # Groq
     GROQ_API_KEY: str = ""
 
     # Tier limits

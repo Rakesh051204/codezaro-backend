@@ -12,9 +12,9 @@ import json
 import asyncio
 import uuid
 import os
-import shutil
 import subprocess
 from datetime import datetime
+from github import Github, GithubException
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -23,19 +23,22 @@ WORKSPACE_BASE = os.path.join(os.getcwd(), "workspaces")
 os.makedirs(WORKSPACE_BASE, exist_ok=True)
 
 def get_workspace_path(user_id: int, session_id: int) -> str:
-    """Return the full path for a session's workspace"""
     return os.path.join(WORKSPACE_BASE, str(user_id), str(session_id))
 
 def clone_or_update_repo(repo_url: str, target_dir: str) -> str:
-    """Clone a git repo into target_dir, or pull if already exists"""
     if os.path.exists(os.path.join(target_dir, ".git")):
-        # Repo exists, pull latest
         subprocess.run(["git", "-C", target_dir, "pull"], check=False)
         return "Repository updated"
     else:
-        # Clone fresh
         subprocess.run(["git", "clone", repo_url, target_dir], check=True)
         return "Repository cloned"
+
+def has_uncommitted_changes(repo_dir: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", repo_dir, "status", "--porcelain"],
+        capture_output=True, text=True
+    )
+    return bool(result.stdout.strip())
 
 # ----- Models -----
 class AgentTask(BaseModel):
@@ -51,6 +54,12 @@ class SessionCreate(BaseModel):
     task: str
     repo_url: Optional[str] = None
 
+class PRCreate(BaseModel):
+    session_id: int
+    title: str
+    body: str
+    branch_name: Optional[str] = None
+
 # In-memory store for pending approvals
 pending_approvals: Dict[str, asyncio.Future] = {}
 
@@ -63,11 +72,10 @@ def create_session(
     db: Session = Depends(get_db)
 ):
     """Create a new agent session for the current user."""
-    # Create workspace directory
-    # We'll create the session first, then the path
+    # Create session record first
     new_session = AgentSession(
         user_id=current_user.id,
-        workspace_path="",  # placeholder, updated after session created
+        workspace_path="",
         task=session_data.task,
         repo_url=session_data.repo_url,
         status=AgentSessionStatus.CREATED,
@@ -76,21 +84,18 @@ def create_session(
     db.commit()
     db.refresh(new_session)
 
-    # Now we have the session ID, create the workspace path
+    # Now create workspace directory
     workspace_path = get_workspace_path(current_user.id, new_session.id)
     os.makedirs(workspace_path, exist_ok=True)
-
-    # Update session with the actual path
     new_session.workspace_path = workspace_path
     db.commit()
     db.refresh(new_session)
 
-    # If repo_url is provided, clone the repo into the workspace
+    # Clone repo if provided
     if session_data.repo_url:
         try:
             clone_or_update_repo(session_data.repo_url, workspace_path)
         except Exception as e:
-            # Mark session as failed if cloning fails
             new_session.status = AgentSessionStatus.FAILED
             db.commit()
             raise HTTPException(status_code=400, detail=f"Failed to clone repo: {str(e)}")
@@ -103,7 +108,6 @@ def list_sessions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all agent sessions for the current user."""
     sessions = db.query(AgentSession).filter(
         AgentSession.user_id == current_user.id
     ).order_by(AgentSession.created_at.desc()).all()
@@ -145,10 +149,8 @@ async def stream_agent(
     # if current_user.tier != "PRO":
     #     raise HTTPException(status_code=403, detail="Agent mode requires Pro subscription")
 
-    # Load or create session
     session = None
     if task.session_id:
-        # Resume existing session
         session = db.query(AgentSession).filter(
             AgentSession.id == task.session_id,
             AgentSession.user_id == current_user.id
@@ -156,13 +158,10 @@ async def stream_agent(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         workspace_path = session.workspace_path
-        # Update status to in_progress
         session.status = AgentSessionStatus.IN_PROGRESS
         db.commit()
     else:
-        # Create a new session
-        workspace_path = get_workspace_path(current_user.id, 0)  # placeholder for now
-        # We'll create the session after we know the ID
+        # Create new session
         new_session = AgentSession(
             user_id=current_user.id,
             workspace_path="",
@@ -173,17 +172,13 @@ async def stream_agent(
         db.add(new_session)
         db.commit()
         db.refresh(new_session)
-
-        # Now we have the ID, create the workspace directory
         workspace_path = get_workspace_path(current_user.id, new_session.id)
         os.makedirs(workspace_path, exist_ok=True)
-
         new_session.workspace_path = workspace_path
         new_session.status = AgentSessionStatus.IN_PROGRESS
         db.commit()
         session = new_session
 
-        # If repo_url is provided, clone the repo
         if task.repo_url:
             try:
                 clone_or_update_repo(task.repo_url, workspace_path)
@@ -192,7 +187,6 @@ async def stream_agent(
                 db.commit()
                 raise HTTPException(status_code=400, detail=f"Failed to clone repo: {str(e)}")
 
-    # Initialize the agent with the persistent workspace
     agent = CodeZaroAgent(workspace_dir=workspace_path)
 
     async def event_generator():
@@ -214,15 +208,11 @@ You must respond with a JSON object containing:
 - "action": one of the tool names
 - "action_input": a dictionary of parameters for that tool
 - "stop": true if you think the task is complete, false otherwise
-
-If you need to chain multiple steps, do them one at a time.
-Do not include any other text in your response besides the JSON.
 """ }
         ]
 
         step_num = 0
         while step_num < 10:
-            # Get decision from LLM
             response = agent.client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=history,
@@ -242,8 +232,6 @@ Do not include any other text in your response besides the JSON.
                     decision = {"stop": True, "thought": "Could not parse decision, stopping."}
 
             step_num += 1
-
-            # Send thought and action (if any) as a normal step
             yield f"data: {json.dumps({'step': step_num, 'decision': decision})}\n\n"
 
             if decision.get("stop", False):
@@ -254,19 +242,15 @@ Do not include any other text in your response besides the JSON.
 
             action = decision.get("action")
             action_input = decision.get("action_input", {})
-
             if not action or action not in [t["name"] for t in agent.tools]:
                 break
 
-            # --- Approval phase ---
             action_id = str(uuid.uuid4())
             future = asyncio.get_event_loop().create_future()
             pending_approvals[action_id] = future
 
-            # Send proposal event
             yield f"data: {json.dumps({'type': 'action_proposed', 'action_id': action_id, 'tool': action, 'params': action_input})}\n\n"
 
-            # Wait for approval (with timeout)
             try:
                 approved = await asyncio.wait_for(future, timeout=60.0)
             except asyncio.TimeoutError:
@@ -275,21 +259,97 @@ Do not include any other text in your response besides the JSON.
                 pending_approvals.pop(action_id, None)
 
             if approved:
-                # Execute tool
                 result = agent.execute_tool(action, action_input)
                 yield f"data: {json.dumps({'type': 'tool_result', 'result': result})}\n\n"
                 history.append({"role": "assistant", "content": content})
                 history.append({"role": "user", "content": f"Tool result:\n{result}"})
             else:
-                # Rejected
                 yield f"data: {json.dumps({'type': 'action_rejected', 'action_id': action_id})}\n\n"
                 history.append({"role": "assistant", "content": content})
-                history.append({"role": "user", "content": "Action was rejected by the user. Proceed with the next step."})
+                history.append({"role": "user", "content": "Action rejected. Proceed."})
 
-        # End of loop (max steps reached or error)
         if session.status != AgentSessionStatus.COMPLETED:
-            session.status = AgentSessionStatus.COMPLETED  # or FAILED if we have error info
+            session.status = AgentSessionStatus.COMPLETED
             db.commit()
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ----- PR creation endpoint -----
+@router.post("/pr")
+async def create_pull_request(
+    pr_data: PRCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    session = db.query(AgentSession).filter(
+        AgentSession.id == pr_data.session_id,
+        AgentSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.repo_url:
+        raise HTTPException(status_code=400, detail="Session has no repository URL")
+
+    workspace = session.workspace_path
+    if not os.path.exists(workspace):
+        raise HTTPException(status_code=400, detail="Workspace directory missing")
+
+    if not has_uncommitted_changes(workspace):
+        raise HTTPException(status_code=400, detail="No changes to commit")
+
+    github_token = os.getenv("GITHUB_TOKEN")
+    if not github_token:
+        raise HTTPException(status_code=500, detail="GitHub token not configured")
+
+    g = Github(github_token)
+
+    repo_url = session.repo_url
+    if repo_url.endswith(".git"):
+        repo_url = repo_url[:-4]
+    parts = repo_url.split("/")
+    repo_name = f"{parts[-2]}/{parts[-1]}"
+
+    try:
+        repo = g.get_repo(repo_name)
+    except GithubException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to access repo: {e.data}")
+
+    branch_name = pr_data.branch_name or f"codezaro-agent-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    try:
+        default_branch = repo.default_branch
+        ref = repo.get_git_ref(f"heads/{default_branch}")
+        latest_sha = ref.object.sha
+        repo.create_git_ref(f"refs/heads/{branch_name}", latest_sha)
+    except GithubException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to create branch: {e.data}")
+
+    try:
+        subprocess.run(["git", "-C", workspace, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", workspace, "commit", "-m", pr_data.title or "CodeZaro agent changes"],
+            check=True
+        )
+        auth_url = repo_url.replace("https://", f"https://{github_token}@")
+        subprocess.run(
+            ["git", "-C", workspace, "remote", "set-url", "origin", auth_url],
+            check=True
+        )
+        subprocess.run(
+            ["git", "-C", workspace, "push", "origin", branch_name],
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Git operation failed: {e.stderr}")
+
+    try:
+        pr = repo.create_pull(
+            title=pr_data.title or "CodeZaro agent changes",
+            body=pr_data.body or "Automated changes from CodeZaro agent",
+            head=branch_name,
+            base=default_branch,
+        )
+        return {"pr_url": pr.html_url, "pr_number": pr.number}
+    except GithubException as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create PR: {e.data}")

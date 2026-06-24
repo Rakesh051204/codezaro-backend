@@ -9,6 +9,14 @@ class UserTier(str, enum.Enum):
     PRO = "pro"
     TEAM = "team"
 
+
+class AgentSessionStatus(str, enum.Enum):
+    CREATED = "created"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -22,6 +30,8 @@ class User(Base):
 
     reviews = relationship("Review", back_populates="user", cascade="all, delete-orphan")
     usage = relationship("Usage", back_populates="user", cascade="all, delete-orphan")
+    agent_sessions = relationship("AgentSession", back_populates="user", cascade="all, delete-orphan")
+
 
 class Review(Base):
     __tablename__ = "reviews"
@@ -36,6 +46,7 @@ class Review(Base):
 
     user = relationship("User", back_populates="reviews")
 
+
 class Usage(Base):
     __tablename__ = "usage"
 
@@ -45,3 +56,18 @@ class Usage(Base):
     review_count = Column(Integer, default=0)
 
     user = relationship("User", back_populates="usage")
+
+
+class AgentSession(Base):
+    __tablename__ = "agent_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    workspace_path = Column(String, nullable=False)
+    task = Column(Text, nullable=True)
+    status = Column(Enum(AgentSessionStatus), default=AgentSessionStatus.CREATED)
+    repo_url = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="agent_sessions")

@@ -7,7 +7,7 @@ from app import models
 from app.auth import router as auth_router
 from app.review import router as review_router
 from app.payments import router as payments_router
-from app.agent.router import router as agent_router   # <-- added agent
+from app.agent.router import router as agent_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,11 +22,11 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "http://localhost:3002",          # <-- added
+        "http://localhost:3002",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",          # <-- added
+        "http://127.0.0.1:3002",
         "http://127.0.0.1:5173",
         "https://codezaro-frontend.onrender.com",
         "https://codezaro-backend-7.onrender.com",
@@ -40,7 +40,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(review_router)
 app.include_router(payments_router)
-app.include_router(agent_router)          # <-- added agent
+app.include_router(agent_router)
 
 @app.get("/")
 def root():
